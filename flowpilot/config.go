@@ -47,8 +47,14 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Identity) == "" {
 		return errors.New("config.identity is required")
 	}
+	if strings.TrimSpace(c.RunDirectory) == "" {
+		return errors.New("config.run_directory is required")
+	}
 	if strings.TrimSpace(c.Workload.Path) == "" {
 		return errors.New("workload.path is required")
+	}
+	if strings.TrimSpace(c.Workload.Version) == "" {
+		return errors.New("workload.version is required")
 	}
 	if filepath.IsAbs(c.Workload.Path) == false {
 		return errors.New("workload.path must be absolute")
