@@ -74,10 +74,13 @@ func (r Runner) Exec(ctx context.Context, command Command) (*RunRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	workingDirectory, _ := os.Getwd()
+	workingDirectory, wdErr := os.Getwd()
 	record := &RunRecord{Version: 1, RunID: id, Name: command.Name, ConfigurationID: r.Config.Identity, StartedAt: now(), Status: "running", Phases: map[string]Outcome{},
 		Command: &CommandRecord{Executable: command.Path, Args: redactArguments(command.Args), WorkingDirectory: workingDirectory,
 			StdoutLog: filepath.Join(dir, id+".stdout.log"), StderrLog: filepath.Join(dir, id+".stderr.log")}}
+	if wdErr != nil {
+		record.Diagnostics = append(record.Diagnostics, "determine working directory: "+wdErr.Error())
+	}
 	stdoutLog, err := createLog(record.Command.StdoutLog)
 	if err != nil {
 		return nil, err
@@ -98,8 +101,7 @@ func (r Runner) Exec(ctx context.Context, command Command) (*RunRecord, error) {
 		out, phaseErr := r.runConnector(ctx, record, "prepare", *r.Config.Prepare, record, now)
 		if phaseErr != nil {
 			record.Status = "failed"
-			r.runPostmortem(postCtx, record, record, now)
-			return record, phaseErr
+			return record, errors.Join(phaseErr, r.runPostmortem(postCtx, record, record, now))
 		}
 		if out.RequestID != "" {
 			record.RequestIdentity = out.RequestID
@@ -114,8 +116,7 @@ func (r Runner) Exec(ctx context.Context, command Command) (*RunRecord, error) {
 	}
 	if workErr := r.runCommand(ctx, record, command, timeout, stdout, stderr, now); workErr != nil {
 		record.Status = "failed"
-		r.runPostmortem(postCtx, record, record, now)
-		return record, workErr
+		return record, errors.Join(workErr, r.runPostmortem(postCtx, record, record, now))
 	}
 	if postErr := r.runPostmortem(postCtx, record, record, now); postErr != nil {
 		record.Status = "failed"
@@ -234,8 +235,8 @@ func redactArguments(args []string) []string {
 }
 
 func sensitiveName(name string) bool {
-	lower := strings.ToLower(name)
-	for _, key := range []string{"password", "token", "secret", "credential", "authorization", "api-key", "apikey"} {
+	lower := strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	for _, key := range []string{"password", "passwd", "token", "secret", "credential", "authorization", "api-key", "apikey"} {
 		if strings.Contains(lower, key) {
 			return true
 		}

@@ -133,8 +133,8 @@ func TestExecRejectsInvalidConfiguration(t *testing.T) {
 }
 
 func TestRedactArguments(t *testing.T) {
-	got := redactArguments([]string{"--password", "p", "--api-key=k", "-token", "t", "--name", "x", "file-token.txt"})
-	want := []string{"--password", "[REDACTED]", "--api-key=[REDACTED]", "-token", "[REDACTED]", "--name", "x", "file-token.txt"}
+	got := redactArguments([]string{"--password", "p", "--api-key=k", "-token", "t", "--name", "x", "file-token.txt", "--API_KEY", "u"})
+	want := []string{"--password", "[REDACTED]", "--api-key=[REDACTED]", "-token", "[REDACTED]", "--name", "x", "file-token.txt", "--API_KEY", "[REDACTED]"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q", got)
 	}

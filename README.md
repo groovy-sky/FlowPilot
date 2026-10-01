@@ -22,7 +22,9 @@ stored. FlowPilot exits with the command's exit status (`128 + signal` when the
 command is killed by a signal). Its own failures use `125`, `126` when the
 command cannot be started, and `127` when it cannot be found. Ctrl-C reaches the
 command through the terminal; `SIGTERM` and `SIGHUP` sent to FlowPilot are
-forwarded to the command as `SIGTERM` so the run is still recorded.
+forwarded to the command as `SIGTERM` so the run is still recorded. An
+interrupt sent only to the FlowPilot process (not to the terminal's process
+group) is not forwarded.
 
 Each invocation stores three files in the run directory, all with mode 0600:
 
