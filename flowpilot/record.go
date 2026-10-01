@@ -13,6 +13,7 @@ import (
 type RunRecord struct {
 	Version          int                `json:"version"`
 	RunID            string             `json:"run_id"`
+	Name             string             `json:"name,omitempty"`
 	RequestIdentity  string             `json:"request_identity,omitempty"`
 	ConfigurationID  string             `json:"configuration_id"`
 	StartedAt        time.Time          `json:"started_at"`
@@ -20,6 +21,7 @@ type RunRecord struct {
 	Status           string             `json:"status"`
 	Phases           map[string]Outcome `json:"phases"`
 	WorkloadExitCode *int               `json:"workload_exit_code,omitempty"`
+	Command          *CommandRecord     `json:"command,omitempty"`
 	Diagnostics      []string           `json:"diagnostics,omitempty"`
 	Errors           []StructuredError  `json:"errors,omitempty"`
 }
@@ -33,6 +35,20 @@ type Outcome struct {
 	Output       any              `json:"output,omitempty"`
 	Diagnostics  []string         `json:"diagnostics,omitempty"`
 	Error        *StructuredError `json:"error,omitempty"`
+}
+
+// CommandRecord describes a command supplied on the command line. Arguments
+// are redacted; the environment is never recorded.
+type CommandRecord struct {
+	Executable       string   `json:"executable"`
+	ResolvedPath     string   `json:"resolved_path,omitempty"`
+	Args             []string `json:"args"`
+	WorkingDirectory string   `json:"working_directory,omitempty"`
+	PID              int      `json:"pid,omitempty"`
+	Signal           string   `json:"signal,omitempty"`
+	DurationMS       *int64   `json:"duration_ms,omitempty"`
+	StdoutLog        string   `json:"stdout_log"`
+	StderrLog        string   `json:"stderr_log"`
 }
 
 type StructuredError struct {
