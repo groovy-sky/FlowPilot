@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -26,6 +28,7 @@ type options struct {
 	name        string
 	quiet       bool
 	noConfig    bool
+	resultJSON  bool
 }
 
 func run(args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -38,6 +41,7 @@ func run(args []string, getenv func(string) string, stdin io.Reader, stdout, std
 	flags.StringVar(&opts.name, "name", "", "human-readable run name (command mode)")
 	flags.BoolVar(&opts.quiet, "quiet", false, "store command output without mirroring it (command mode)")
 	flags.BoolVar(&opts.noConfig, "no-config", false, "skip optional configuration discovery (command mode)")
+	flags.BoolVar(&opts.resultJSON, "result-json", false, "write final JSON result with Base64 command output to stdout (command mode)")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage:")
 		fmt.Fprintln(stderr, "  flowpilot [options] -- <executable> [arguments...]")
@@ -52,6 +56,9 @@ func run(args []string, getenv func(string) string, stdin io.Reader, stdout, std
 	}
 	if flags.NArg() > 0 {
 		return runCommand(opts, flags.Args(), getenv, stdin, stdout, stderr)
+	}
+	if opts.resultJSON {
+		return fail(stderr, "-result-json requires a command")
 	}
 	return runConfigured(opts, stdin, stdout, stderr)
 }
@@ -85,7 +92,10 @@ func runCommand(opts options, command []string, getenv func(string) string, stdi
 	defer stop()
 
 	cmd := flowpilot.Command{Path: command[0], Args: command[1:], Name: opts.name, Stdin: stdin}
-	if !opts.quiet {
+	var commandStdout, commandStderr bytes.Buffer
+	if opts.resultJSON {
+		cmd.Stdout, cmd.Stderr = &commandStdout, &commandStderr
+	} else if !opts.quiet {
 		cmd.Stdout, cmd.Stderr = stdout, stderr
 	}
 	runner := flowpilot.Runner{Config: config, Connect: flowpilot.ConnectorRunner{MaxOutputBytes: config.Policy.MaxOutputBytes}}
@@ -100,6 +110,38 @@ func runCommand(opts options, command []string, getenv func(string) string, stdi
 	if !opts.quiet {
 		fmt.Fprintf(stderr, "flowpilot: run %s %s (exit %d); record: %s\n", record.RunID, record.Status, code,
 			filepath.Join(filepath.Dir(record.Command.StdoutLog), record.RunID+".json"))
+	}
+	if opts.resultJSON {
+		exitCode := code
+		if record.WorkloadExitCode != nil {
+			exitCode = *record.WorkloadExitCode
+		}
+		result := struct {
+			RunID     string `json:"run_id"`
+			Status    string `json:"status"`
+			ExitCode  int    `json:"exit_code"`
+			Result    string `json:"result"`
+			ErrorLogs string `json:"error_logs"`
+		}{
+			RunID: record.RunID, Status: record.Status, ExitCode: exitCode,
+			Result:    base64.StdEncoding.EncodeToString(commandStdout.Bytes()),
+			ErrorLogs: base64.StdEncoding.EncodeToString(commandStderr.Bytes()),
+		}
+		encoded, err := json.Marshal(result)
+		if err == nil {
+			encoded = append(encoded, '\n')
+			var n int
+			n, err = stdout.Write(encoded)
+			if err == nil && n != len(encoded) {
+				err = io.ErrShortWrite
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(stderr, "flowpilot: write JSON result:", err)
+			if code == 0 {
+				return flowpilot.ExitInternal
+			}
+		}
 	}
 	return code
 }
