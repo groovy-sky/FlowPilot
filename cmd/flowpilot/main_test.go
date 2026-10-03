@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -178,6 +179,39 @@ func TestRunCommandJSONOutputFailure(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestRunCommandJSONBrokenPipe(t *testing.T) {
+	for _, commandCode := range []int{0, 7} {
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader.Close()
+		cmd := exec.Command(os.Args[0], "-test.run=^TestRunCommandJSONBrokenPipeHelper$")
+		cmd.Env = append(os.Environ(), "FLOWPILOT_TEST_BROKEN_PIPE=1", "FLOWPILOT_TEST_RUN_DIR="+t.TempDir(),
+			"FLOWPILOT_TEST_EXIT_CODE="+strconv.Itoa(commandCode))
+		var stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = writer, &stderr
+		err = cmd.Run()
+		writer.Close()
+		wantCode := commandCode
+		if wantCode == 0 {
+			wantCode = flowpilot.ExitInternal
+		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != wantCode || !strings.Contains(stderr.String(), "write JSON result:") {
+			t.Fatalf("err=%v want exit=%d stderr=%q", err, wantCode, stderr.String())
+		}
+	}
+}
+
+func TestRunCommandJSONBrokenPipeHelper(t *testing.T) {
+	if os.Getenv("FLOWPILOT_TEST_BROKEN_PIPE") != "1" {
+		return
+	}
+	os.Exit(run([]string{"-no-config", "-run-dir", os.Getenv("FLOWPILOT_TEST_RUN_DIR"), "-result-json", "--",
+		"sh", "-c", "exit " + os.Getenv("FLOWPILOT_TEST_EXIT_CODE")}, os.Getenv, nil, os.Stdout, os.Stderr))
 }
 
 func TestRunJSONRequiresCommand(t *testing.T) {

@@ -130,6 +130,8 @@ func runCommand(opts options, command []string, getenv func(string) string, stdi
 		encoded, err := json.Marshal(result)
 		if err == nil {
 			encoded = append(encoded, '\n')
+			signal.Ignore(syscall.SIGPIPE)
+			defer signal.Reset(syscall.SIGPIPE)
 			var n int
 			n, err = stdout.Write(encoded)
 			if err == nil && n != len(encoded) {
