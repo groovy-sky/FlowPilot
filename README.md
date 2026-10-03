@@ -33,7 +33,7 @@ Each invocation stores three files in the run directory, all with mode 0600:
   (requested executable, resolved path, redacted arguments, working directory,
   PID, signal, duration, and log paths). It is written before the command
   starts and rewritten when the run finishes.
-- `<run_id>.stdout.log` and `<run_id>.stderr.log` — the command's output.
+- `<run_id>.stdout.log` and `<run_id>.stderr.log` — the command's raw output.
 
 The run directory is the first of: `-run-dir`, `$FLOWPILOT_RUN_DIR`,
 `run_directory` from optional configuration, `$XDG_STATE_HOME/flowpilot/runs`,
@@ -42,11 +42,52 @@ written to stderr.
 
 Command options: `-name` (stored as `name` in the record), `-run-dir`,
 `-quiet` (store output without mirroring it or printing the summary),
-`-config`, and `-no-config`. Arguments following `--token`, `--password`,
+`-result-json` (emit the final result as JSON), `-config`, and `-no-config`.
+Arguments following `--token`, `--password`,
 `--secret`, `--api-key`, `--authorization`, and similar flags (including
 `--flag=value` forms) are redacted in the record but passed unchanged to the
 command. The environment is never recorded; other credential formats may still
 appear in arguments or output logs, so keep the run directory access-controlled.
+
+### JSON command result
+
+Use `-result-json` in command mode to emit exactly one JSON object to stdout
+after the run finishes, instead of mirroring the command's stdout and stderr.
+Raw log files and the stored run record are unchanged. FlowPilot's summary and
+errors stay on stderr; add `-quiet` to suppress the summary without suppressing
+the JSON result.
+
+```sh
+flowpilot -result-json -- /bin/sh -c 'printf "hello\n"; printf "oops\n" >&2'
+```
+
+Example stdout:
+
+```json
+{
+  "run_id": "a1b2c3d4",
+  "status": "succeeded",
+  "exit_code": 0,
+  "result": "aGVsbG8K",
+  "error_logs": "b29wcwo="
+}
+```
+
+The schema contains `run_id` (string), `status` (final run status:
+`"succeeded"` or `"failed"`), `exit_code` (integer command exit code),
+`result` (Base64-encoded stdout), and `error_logs` (Base64-encoded stderr).
+Streams are encoded from their exact bytes, including binary data and newlines;
+they are never decoded or interpreted as text. Empty streams are `""`.
+If the command cannot run, `exit_code` is FlowPilot's failure code. Otherwise
+it is the child's exit code, even if a later postmortem failure makes FlowPilot
+exit with `125`. The existing process exit-status rules still apply.
+
+JSON mode buffers command output in memory and Base64 is not encryption or
+redaction: protect the JSON output as you would the raw logs. Failures before a
+run record exists produce only an error on stderr, not a JSON result. JSON
+encoding or output failures are reported on stderr without retrying a partial
+write; they make an otherwise successful invocation exit with `125`, while
+preserving an existing nonzero exit status.
 
 ### Optional JSON configuration
 
