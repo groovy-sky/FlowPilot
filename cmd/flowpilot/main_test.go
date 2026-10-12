@@ -253,3 +253,169 @@ func TestRunUsageErrors(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
 }
+
+func TestRunIgnoreErrors(t *testing.T) {
+	for _, mode := range []string{"command", "command-json", "configured"} {
+		for _, failure := range []string{"none", "execute", "prepare", "postmortem", "launch"} {
+			if mode == "configured" && failure == "launch" {
+				continue
+			}
+			for _, ignoreErrors := range []bool{false, true} {
+				t.Run(mode+"/"+failure+"/ignore="+strconv.FormatBool(ignoreErrors), func(t *testing.T) {
+					dir := t.TempDir()
+					workload := filepath.Join(dir, "workload")
+					workloadCode := 0
+					if failure == "execute" {
+						workloadCode = 7
+					}
+					if failure != "launch" {
+						body := "#!/bin/sh\nprintf 'out\\n'; printf 'err\\n' >&2; exit " + strconv.Itoa(workloadCode) + "\n"
+						if err := os.WriteFile(workload, []byte(body), 0700); err != nil {
+							t.Fatal(err)
+						}
+					}
+					config := flowpilot.Config{
+						Version: 1, Identity: "test", RunDirectory: filepath.Join(dir, "runs"),
+						Workload: flowpilot.WorkloadConfig{Path: workload, Version: "1"},
+						Policy:   flowpilot.PolicyConfig{MaxOutputBytes: 4096},
+					}
+					if failure == "prepare" || failure == "postmortem" {
+						connector := filepath.Join(dir, "connector")
+						if err := os.WriteFile(connector, []byte("#!/bin/sh\ncat >/dev/null\nprintf '{\"version\":1,\"ok\":false}'\n"), 0700); err != nil {
+							t.Fatal(err)
+						}
+						cfg := &flowpilot.ConnectorConfig{Path: connector, Version: "1"}
+						if failure == "prepare" {
+							config.Prepare = cfg
+						} else {
+							config.Postmortem = cfg
+						}
+					}
+					data, err := json.Marshal(config)
+					if err != nil {
+						t.Fatal(err)
+					}
+					configPath := filepath.Join(dir, "config.json")
+					if err := os.WriteFile(configPath, data, 0600); err != nil {
+						t.Fatal(err)
+					}
+					args := []string{"-config", configPath}
+					if ignoreErrors {
+						args = append(args, "--ignore-errors")
+					}
+					if mode == "command-json" {
+						args = append(args, "-result-json")
+					}
+					if mode != "configured" {
+						args = append(args, "--", workload)
+					}
+					var stdout, stderr bytes.Buffer
+					code := run(args, func(string) string { return "" }, strings.NewReader("{}"), &stdout, &stderr)
+					actualCode := 0
+					wantStatus := "succeeded"
+					if failure != "none" {
+						wantStatus = "failed"
+						actualCode = flowpilot.ExitInternal
+						if mode == "configured" {
+							actualCode = 1
+						} else if failure == "execute" {
+							actualCode = workloadCode
+						} else if failure == "launch" {
+							actualCode = flowpilot.ExitNotFound
+						}
+					}
+					wantCode := actualCode
+					if ignoreErrors {
+						wantCode = 0
+					}
+					if code != wantCode {
+						t.Fatalf("code=%d want=%d stderr=%q", code, wantCode, stderr.String())
+					}
+					records, err := filepath.Glob(filepath.Join(config.RunDirectory, "*.json"))
+					if err != nil || len(records) != 1 {
+						t.Fatalf("records=%v err=%v", records, err)
+					}
+					data, err = os.ReadFile(records[0])
+					if err != nil {
+						t.Fatal(err)
+					}
+					var record flowpilot.RunRecord
+					if err := json.Unmarshal(data, &record); err != nil {
+						t.Fatal(err)
+					}
+					if record.Status != wantStatus || record.FinishedAt == nil || (failure != "none" && len(record.Errors) == 0) {
+						t.Fatalf("unexpected record: %+v", record)
+					}
+					executed := failure != "prepare" && failure != "launch"
+					if executed && (mode != "configured" || workloadCode != 0) && (record.WorkloadExitCode == nil || *record.WorkloadExitCode != workloadCode) {
+						t.Fatalf("workload exit code lost: %+v", record)
+					}
+					if mode == "configured" {
+						if !bytes.Equal(bytes.TrimSpace(stdout.Bytes()), bytes.TrimSpace(data)) {
+							t.Fatalf("stdout differs from stored record: %q", stdout.String())
+						}
+						if executed && !strings.Contains(strings.Join(record.Phases["execute"].Diagnostics, "\n"), "out\nerr") {
+							t.Fatalf("missing workload diagnostics: %q", stdout.String())
+						}
+					} else {
+						if !strings.Contains(stderr.String(), wantStatus+" (exit "+strconv.Itoa(actualCode)+")") {
+							t.Fatalf("actual outcome missing from summary: %q", stderr.String())
+						}
+						if mode == "command-json" {
+							var result struct {
+								Status   string `json:"status"`
+								ExitCode int    `json:"exit_code"`
+								Result   string `json:"result"`
+							}
+							if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+								t.Fatal(err)
+							}
+							wantResultCode := actualCode
+							if executed {
+								wantResultCode = workloadCode
+							}
+							if result.Status != wantStatus || result.ExitCode != wantResultCode || (executed && result.Result != "b3V0Cg==") {
+								t.Fatalf("actual outcome missing from JSON: %+v", result)
+							}
+						} else if executed && (stdout.String() != "out\n" || !strings.HasPrefix(stderr.String(), "err\n")) {
+							t.Fatalf("output changed: stdout=%q stderr=%q", stdout.String(), stderr.String())
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRunIgnoreErrorsBeforeExecution(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		code int
+	}{
+		{"configured config read", []string{"-config", filepath.Join(t.TempDir(), "missing")}, 2},
+		{"command config read", []string{"-config", filepath.Join(t.TempDir(), "missing"), "--", "true"}, flowpilot.ExitInternal},
+		{"missing config", nil, 2},
+		{"JSON without command", []string{"-result-json"}, 2},
+		{"unknown flag", []string{"--unknown"}, 2},
+		{"invalid flag value", []string{"--ignore-errors=invalid"}, 2},
+	} {
+		for _, ignoreErrors := range []bool{false, true} {
+			t.Run(tt.name+"/ignore="+strconv.FormatBool(ignoreErrors), func(t *testing.T) {
+				args := tt.args
+				wantCode := tt.code
+				if ignoreErrors {
+					args = append([]string{"--ignore-errors"}, args...)
+					if tt.name != "unknown flag" && tt.name != "invalid flag value" {
+						wantCode = 0
+					}
+				}
+				var stdout, stderr bytes.Buffer
+				code := run(args, func(string) string { return "" }, nil, &stdout, &stderr)
+				if code != wantCode || stdout.Len() != 0 || stderr.Len() == 0 {
+					t.Fatalf("code=%d want=%d stdout=%q stderr=%q", code, wantCode, stdout.String(), stderr.String())
+				}
+			})
+		}
+	}
+}
