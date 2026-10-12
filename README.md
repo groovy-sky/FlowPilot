@@ -26,6 +26,19 @@ forwarded to the command as `SIGTERM` so the run is still recorded. An
 interrupt sent only to the FlowPilot process (not to the terminal's process
 group) is not forwarded.
 
+Use `--ignore-errors` before `--` to return process exit status 0 even on failure:
+
+```sh
+flowpilot --ignore-errors -- /bin/sh -c 'echo failed >&2; exit 7'
+```
+
+This flag also works in configured-workflow mode. It changes only FlowPilot's
+process exit status: run records, diagnostics, summaries, and JSON result
+`status` and `exit_code` still reflect the actual outcome. It does not continue
+past failed preparation or change postmortem behavior. Errors before execution
+(such as invalid configuration) are also ignored for exit-status purposes;
+malformed or unknown CLI flags still return a usage error.
+
 Each invocation stores three files in the run directory, all with mode 0600:
 
 - `<run_id>.json` — run record with status, timestamps, configuration
@@ -134,6 +147,7 @@ Without a command, `-config` is required and the workload comes from the
 configuration. The command writes the machine-readable run record to stdout and returns a
 non-zero exit code for failed execution or required postmortem actions. A run
 record is also stored as `<run_id>.json` in `run_directory` with mode 0600.
+Add `--ignore-errors` to return 0 while retaining the actual failed run record.
 Configuration must use absolute executable paths and is intentionally JSON so
 the local workflow has no implicit shell evaluation.
 

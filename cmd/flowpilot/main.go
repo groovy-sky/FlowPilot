@@ -22,13 +22,14 @@ func main() {
 }
 
 type options struct {
-	configPath  string
-	requestPath string
-	runDir      string
-	name        string
-	quiet       bool
-	noConfig    bool
-	resultJSON  bool
+	configPath   string
+	requestPath  string
+	runDir       string
+	name         string
+	quiet        bool
+	noConfig     bool
+	resultJSON   bool
+	ignoreErrors bool
 }
 
 func run(args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -42,6 +43,7 @@ func run(args []string, getenv func(string) string, stdin io.Reader, stdout, std
 	flags.BoolVar(&opts.quiet, "quiet", false, "store command output without mirroring it (command mode)")
 	flags.BoolVar(&opts.noConfig, "no-config", false, "skip optional configuration discovery (command mode)")
 	flags.BoolVar(&opts.resultJSON, "result-json", false, "write final JSON result with Base64 command output to stdout (command mode)")
+	flags.BoolVar(&opts.ignoreErrors, "ignore-errors", false, "exit with status 0 without changing run outcomes or diagnostics")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "Usage:")
 		fmt.Fprintln(stderr, "  flowpilot [options] -- <executable> [arguments...]")
@@ -54,13 +56,18 @@ func run(args []string, getenv func(string) string, stdin io.Reader, stdout, std
 		}
 		return 2
 	}
+	var code int
 	if flags.NArg() > 0 {
-		return runCommand(opts, flags.Args(), getenv, stdin, stdout, stderr)
+		code = runCommand(opts, flags.Args(), getenv, stdin, stdout, stderr)
+	} else if opts.resultJSON {
+		code = fail(stderr, "-result-json requires a command")
+	} else {
+		code = runConfigured(opts, stdin, stdout, stderr)
 	}
-	if opts.resultJSON {
-		return fail(stderr, "-result-json requires a command")
+	if opts.ignoreErrors {
+		return 0
 	}
-	return runConfigured(opts, stdin, stdout, stderr)
+	return code
 }
 
 func runCommand(opts options, command []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
